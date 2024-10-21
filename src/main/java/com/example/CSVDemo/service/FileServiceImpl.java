@@ -1,24 +1,22 @@
 package com.example.CSVDemo.service;
 
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVRecord;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import com.example.CSVDemo.entity.Member;
-
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.sql.SQLException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.sql.SQLException;
+import org.apache.poi.ss.usermodel.*;
 
 @Service
 public class FileServiceImpl implements FileService {
@@ -27,50 +25,54 @@ public class FileServiceImpl implements FileService {
     private JdbcTemplate jdbcTemplate;
 
     @Override
-    public boolean hasCsvFormat(MultipartFile file) {
-        return "text/csv".equals(file.getContentType());
+    public boolean hasXlsxFormat(MultipartFile file) {
+        return file.getOriginalFilename().endsWith(".xlsx");
     }
 
     @Override
     public String processAndSaveData(MultipartFile file) throws Exception {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8));
-             CSVParser csvParser = new CSVParser(reader, CSVFormat.DEFAULT.withFirstRecordAsHeader().withIgnoreHeaderCase().withTrim())) {
+    try (InputStream is = file.getInputStream();
+         Workbook workbook = new XSSFWorkbook(is)) {
 
-            List<String> headers = csvParser.getHeaderNames();
-            String tableName = sanitizeTableName(file.getOriginalFilename().replace(".csv", ""));
+        Sheet sheet = workbook.getSheetAt(0);
+        List<String> headers = new ArrayList<>();
+        Row headerRow = sheet.getRow(0); // Assuming the first row contains headers
 
-            if (!tableExists(tableName)) {
-                createTable(headers, tableName);
-            } else {
-                // Check and add new columns if necessary
-                addMissingColumns(headers, tableName);
-            }
-
-            for (CSVRecord csvRecord : csvParser) {
-                List<String> values = convertRecordToValues(csvRecord);
-                String uniqueIdentifier = headers.get(0);  // Assuming the first column as the unique identifier
-                String uniqueFieldValue = csvRecord.get(uniqueIdentifier); // Get value for the unique identifier
-
-                if (isRecordExists(tableName, uniqueIdentifier, uniqueFieldValue)) {
-                    // Check if the data has changed, if so, update it
-                    if (hasDataChanged(tableName, csvRecord, uniqueIdentifier, uniqueFieldValue)) {
-                        updateData(values, headers, tableName, uniqueIdentifier, uniqueFieldValue);
-                    }
-                } else {
-                    // Insert new data if it doesn't exist
-                    insertData(values, headers, tableName);
-                }
-            }
-
-            return tableName;
+        // Extracting header values dynamically
+        for (Cell cell : headerRow) {
+            headers.add(cell.getStringCellValue());
         }
-    }
 
+        String tableName = sanitizeTableName(file.getOriginalFilename().replace(".xlsx", ""));
+        if (!tableExists(tableName)) {
+            createTable(headers, tableName);
+        } else {
+            addMissingColumns(headers, tableName);
+        }
+
+        // Iterate over rows, skipping the header row
+        for (int rowIndex = 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+            Row row = sheet.getRow(rowIndex);
+            List<String> values = convertRowToValues(row);
+            String uniqueIdentifier = headers.get(0); // Assuming the first column is the unique identifier
+            String uniqueFieldValue = values.get(0);
+
+            if (isRecordExists(tableName, uniqueIdentifier, uniqueFieldValue)) {
+                if (hasDataChanged(tableName, row, uniqueIdentifier, uniqueFieldValue)) {
+                    updateData(values, headers, tableName, uniqueIdentifier, uniqueFieldValue);
+                }
+            } else {
+                insertData(values, headers, tableName);
+            }
+        }
+
+        return tableName;
+    }
+}
+
+    
     private String sanitizeTableName(String originalName) {
-        String sanitized = originalName.replaceAll("[^a-zA-Z0-9_]", "_");
-        sanitized = sanitized.replaceAll("_+", "_");
-        sanitized = sanitized.replaceAll("^_|_$", "");
-        return sanitized.isEmpty() ? "default_table" : sanitized;
+        return originalName.replaceAll("[^a-zA-Z0-9_]", "_").replaceAll("_+", "_").replaceAll("^_|_$", "");
     }
 
     private boolean tableExists(String tableName) {
@@ -79,7 +81,7 @@ public class FileServiceImpl implements FileService {
         return count != null && count > 0;
     }
 
-    private void createTable(List<String> headers, String tableName) throws SQLException {
+    private void createTable(List<String> headers, String tableName) {
         String createTableQuery = "CREATE TABLE IF NOT EXISTS `" + tableName + "` (" +
                 headers.stream().map(header -> "`" + header + "` VARCHAR(255)").collect(Collectors.joining(", ")) + ")";
         jdbcTemplate.execute(createTableQuery);
@@ -105,22 +107,21 @@ public class FileServiceImpl implements FileService {
         Integer count = jdbcTemplate.queryForObject(query, new Object[]{uniqueFieldValue}, Integer.class);
         return count != null && count > 0;
     }
-
-    private boolean hasDataChanged(String tableName, CSVRecord csvRecord, String uniqueIdentifier, String uniqueFieldValue) {
+    
+    private boolean hasDataChanged(String tableName, Row row, String uniqueIdentifier, String uniqueFieldValue) {
         String query = "SELECT * FROM `" + tableName + "` WHERE `" + uniqueIdentifier + "` = ?";
-        List<Map<String, Object>> existingData = jdbcTemplate.queryForList(query, uniqueFieldValue);
+        List<String> existingData = jdbcTemplate.queryForList(query, String.class, uniqueFieldValue);
 
         if (existingData.isEmpty()) {
             return true;
         }
 
-        Map<String, Object> existingRow = existingData.get(0);
-        for (String header : csvRecord.toMap().keySet()) {
-            if (!csvRecord.get(header).equals(existingRow.get(header))) {
+        for (int i = 0; i < row.getLastCellNum(); i++) {
+            Cell cell = row.getCell(i);
+            if (cell != null && !cell.toString().equals(existingData.get(i))) {
                 return true; // Data has changed
             }
         }
-
         return false;
     }
 
@@ -131,7 +132,62 @@ public class FileServiceImpl implements FileService {
         parameters.add(uniqueFieldValue);
         jdbcTemplate.update(updateQuery, parameters.toArray(new String[0]));
     }
-
+    public void uploadExcelFile(String filePath) throws IOException, SQLException {
+        FileInputStream fis = new FileInputStream(filePath);
+        Workbook workbook = WorkbookFactory.create(fis);
+        Sheet sheet = workbook.getSheetAt(0);
+    
+        // Create table dynamically based on the Excel header
+        StringBuilder createTableSql = new StringBuilder("CREATE TABLE IF NOT EXISTS test1 (id INT PRIMARY KEY AUTO_INCREMENT, ");
+        Row headerRow = sheet.getRow(0);
+    
+        for (Cell cell : headerRow) {
+            String columnName = cell.getStringCellValue();
+            createTableSql.append("`").append(columnName).append("` VARCHAR(255), "); // Using VARCHAR for simplicity
+        }
+    
+        // Remove last comma and space, and add closing parenthesis
+        createTableSql.setLength(createTableSql.length() - 2);
+        createTableSql.append(");");
+    
+        // Execute create table SQL
+        jdbcTemplate.execute(createTableSql.toString());
+    
+        // Insert data from the Excel file
+        for (int i = 1; i <= sheet.getLastRowNum(); i++) { // Start from the second row
+            Row row = sheet.getRow(i);
+    
+            // Prepare insert SQL with backticks
+            StringBuilder insertSql = new StringBuilder("INSERT INTO test1 (");
+            StringBuilder valuesPlaceholder = new StringBuilder();
+    
+            for (Cell cell : headerRow) {
+                String columnName = cell.getStringCellValue();
+                insertSql.append("`").append(columnName).append("`, ");
+                valuesPlaceholder.append("?, ");
+            }
+    
+            // Remove last comma and space
+            insertSql.setLength(insertSql.length() - 2);
+            valuesPlaceholder.setLength(valuesPlaceholder.length() - 2);
+    
+            // Finalize insert SQL
+            insertSql.append(") VALUES (").append(valuesPlaceholder).append(");");
+    
+            // Prepare values for insertion
+            Object[] values = new Object[headerRow.getLastCellNum()];
+            for (int j = 0; j < headerRow.getLastCellNum(); j++) {
+                Cell cell = row.getCell(j);
+                values[j] = cell != null ? cell.toString() : null; // Handle null values
+            }
+    
+            // Execute insert SQL
+            jdbcTemplate.update(insertSql.toString(), values);
+        }
+    
+        workbook.close();
+        fis.close();
+    }
     private void insertData(List<String> values, List<String> headers, String tableName) {
         String columnNames = String.join(", ", headers.stream().map(header -> "`" + header + "`").collect(Collectors.toList()));
         String placeholders = values.stream().map(value -> "?").collect(Collectors.joining(", "));
@@ -139,17 +195,78 @@ public class FileServiceImpl implements FileService {
         jdbcTemplate.update(insertQuery, values.toArray(new String[0]));
     }
 
-    private List<String> convertRecordToValues(CSVRecord csvRecord) {
+    private List<String> convertRowToValues(Row row) {
         List<String> values = new ArrayList<>();
-        for (String field : csvRecord) {
-            String cleanedValue = cleanValue(field);
+        for (int i = 0; i < row.getLastCellNum(); i++) {
+            Cell cell = row.getCell(i);
+            String cleanedValue = (cell != null) ? cell.toString().trim() : "";
             values.add(cleanedValue.isEmpty() ? "NULL" : cleanedValue);
         }
         return values;
     }
 
-    private String cleanValue(String value) {
-        return value.replaceAll("[^\\x20-\\x7E]", "").trim(); // Keeps printable ASCII characters
+    @Override
+    public void saveFile(MultipartFile file) throws Exception {
+        if (!hasXlsxFormat(file)) {
+            throw new IllegalArgumentException("File is not in Excel format!");
+        }
+
+        try (InputStream inputStream = file.getInputStream();
+             Workbook workbook = new XSSFWorkbook(inputStream)) {
+
+            // Get the first sheet from the Excel file
+            Sheet sheet = workbook.getSheetAt(0);
+            if (sheet == null) {
+                throw new IllegalArgumentException("Sheet is empty!");
+            }
+
+            // Get the headers (assuming first row contains column names)
+            Row headerRow = sheet.getRow(0);
+            if (headerRow == null) {
+                throw new IllegalArgumentException("Header row is missing!");
+            }
+
+            List<String> headers = new ArrayList<>();
+            for (Cell cell : headerRow) {
+                headers.add(cell.getStringCellValue());
+            }
+
+            // Create or modify the table based on headers
+            String tableName = sanitizeTableName(file.getOriginalFilename().replace(".xlsx", ""));
+            if (!tableExists(tableName)) {
+                createTable(headers, tableName);
+            }
+
+            // Iterate through each row (skipping header row) and insert into the database
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) {
+                Row row = sheet.getRow(i);
+                if (row == null) continue;
+
+                List<String> values = new ArrayList<>();
+                for (int j = 0; j < headers.size(); j++) {
+                    Cell cell = row.getCell(j);
+                    values.add(getCellValueAsString(cell));
+                }
+
+                // Insert the row into the database
+                insertData(values, headers, tableName);
+            }
+        }
     }
 
+    private String getCellValueAsString(Cell cell) {
+        if (cell == null) {
+            return "";
+        }
+        switch (cell.getCellType()) {
+            case STRING:
+                return cell.getStringCellValue();
+            case NUMERIC:
+                return String.valueOf(cell.getNumericCellValue());
+            case BOOLEAN:
+                return String.valueOf(cell.getBooleanCellValue());
+            default:
+                return "";
+        }
+    }
 }

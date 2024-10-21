@@ -1,0 +1,49 @@
+
+        .container {
+            margin-top: 40px;
+        }
+        .upload-table {
+            margin-top: 20px;
+        }
+        .table th, .table td {
+            text-align: center;
+        }
+        .action-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        .drag-drop-area {
+            border: 2px dashed #ccc;
+            padding: 30px;
+            text-align: center;
+            background-color: #f8f9fa;
+            margin-top: 20px;
+            height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        .drag-drop-area:hover {
+            background-color: #e9ecef;
+        }
+        .file-input-area {
+            display: none; /* Hide the original file input */
+        }
+        .custom-file-label {
+            pointer-events: none; /* Prevent interactions with the label */
+        }
+        .alert-success {
+            color: green; /* Text color for success */
+            background: none; /* No background */
+            padding: 0; /* No padding */
+            margin: 0; /* No margin */
+        }
+        .alert-danger {
+            color: red; /* Text color for failure */
+            background: none; /* No background */
+            padding: 0; /* No padding */
+            margin: 0; /* No margin */
+        }
+    
