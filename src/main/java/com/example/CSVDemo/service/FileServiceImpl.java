@@ -24,6 +24,15 @@ public class FileServiceImpl implements FileService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    
+
+    @Override
+    public List<String> getTableNames() {
+        String sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'member'";
+        return jdbcTemplate.queryForList(sql, String.class);
+    }
+    
+
     @Override
     public boolean hasXlsxFormat(MultipartFile file) {
         return file.getOriginalFilename().endsWith(".xlsx");
@@ -269,4 +278,15 @@ public class FileServiceImpl implements FileService {
                 return "";
         }
     }
-}
+
+    // @Override
+    // public List<String> getTableNames() {
+    //     // TODO Auto-generated method stub
+    //     throw new UnsupportedOperationException("Unimplemented method 'getTableNames'");
+    
+        // @Override
+        // public List<String> getTableNames() {
+        //     String query = "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()";
+        //     return jdbcTemplate.queryForList(query, String.class);
+    }
+
