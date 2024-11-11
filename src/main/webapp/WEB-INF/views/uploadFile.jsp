@@ -9,9 +9,7 @@
     <title>高度なExcelデータ管理 (Advanced Excel Data Management)</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
-    <link rel="stylesheet" href="${pageContext.request.contextPath}/css/styles.css">
     <style>
-        /* Additional CSS for drag and drop styling */
         .drag-drop-area {
             border: 2px dashed #aaa;
             padding: 20px;
@@ -73,8 +71,8 @@
             <div class="col-md-4">
                 <form action="upload" method="post" enctype="multipart/form-data" id="uploadForm">
                     <div class="drag-drop-area" id="drop-area">
-                        <p>ファイルをここにドラッグ＆ドロップ (Drag and drop files here)</p>
-                        <input type="file" id="fileInput" name="file" class="file-input-area" multiple />
+                        <p>Selected File: <span id="fileName">None</span></p>
+                        <input type="file" id="fileInput" name="file" class="file-input-area" hidden />
                         <label for="fileInput" class="btn btn-outline-secondary">Choose File</label>
                     </div>
                     <button class="btn btn-primary mt-3" type="submit">アップロード (Upload)</button>
@@ -87,44 +85,38 @@
             </div>
         </div>
     </div>
-    
+
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Handle drag and drop events
         const dropArea = document.getElementById('drop-area');
         const fileInput = document.getElementById('fileInput');
-        const dropAreaText = dropArea.querySelector('p');
+        const fileNameDisplay = document.getElementById('fileName');
 
-        // Handle dragover event to add a highlight effect
+        // Update file name when file is selected via input
+        fileInput.addEventListener('change', (event) => {
+            const fileName = event.target.files.length > 0 ? event.target.files[0].name : 'None';
+            fileNameDisplay.innerText = fileName;
+        });
+
+        // Handle drag and drop events
         dropArea.addEventListener('dragover', (event) => {
             event.preventDefault();
             dropArea.classList.add('highlight');
         });
 
-        // Handle dragleave event to remove the highlight
         dropArea.addEventListener('dragleave', () => {
             dropArea.classList.remove('highlight');
         });
 
-        // Handle drop event
         dropArea.addEventListener('drop', (event) => {
             event.preventDefault();
             dropArea.classList.remove('highlight');
             const files = event.dataTransfer.files;
-
             if (files.length > 0) {
                 fileInput.files = files;
-                dropAreaText.innerText = `Selected File: ${files[0].name}`;
+                fileNameDisplay.innerText = files[0].name;
             }
-        });
-
-        // Update the drop area text when a file is selected via the input
-        fileInput.addEventListener('change', (event) => {
-            const fileName = event.target.files.length > 0 ? event.target.files[0].name : '';
-            dropAreaText.innerText = fileName 
-                ? `Selected File: ${fileName}`
-                : 'ファイルをここにドラッグ＆ドロップ (Drag and drop files here)';
         });
     </script>
 </body>

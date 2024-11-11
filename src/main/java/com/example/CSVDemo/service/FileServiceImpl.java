@@ -30,7 +30,9 @@ public class FileServiceImpl implements FileService {
     public List<String> getTableNames() {
         String sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'member'";
         return jdbcTemplate.queryForList(sql, String.class);
+
     }
+    
     
 
     @Override
