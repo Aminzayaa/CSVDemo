@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import java.util.List;
+import java.util.Map;
+
 import com.example.CSVDemo.service.FileService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.ui.Model;
@@ -30,24 +32,22 @@ public class FileController {
     }
     return "redirect:/uploadPage"; // Redirect to the upload page
 }
-    
-    // @GetMapping("/uploadPage")
-    // public String uploadPage() {
-    //     return "uploadFile";}
+
 
     @GetMapping("/uploadPage")
-            public String showUploadFilePage(Model model) {
-                List<String> tableNames = fileService.getTableNames();
-                model.addAttribute("tableNames", tableNames);
-                return "uploadFile";
+    public String showUploadFilePage(Model model) {
+        List<Map<String, Object>> tableInfo = fileService.getTableInfo(); // Fetch table metadata
+        model.addAttribute("tableInfo", tableInfo);
+        return "uploadFile";
     }
+    
+    
 
-     @GetMapping("/tables")
-    @ResponseBody
-    public List<String> getTableNames() {
-        return fileService.getTableNames();
+
+    
     
     }
-  }
+  
 
-   
+
+

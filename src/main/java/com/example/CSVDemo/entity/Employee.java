@@ -1,6 +1,8 @@
 package com.example.CSVDemo.entity;
 
 import jakarta.persistence.*;
+
+import java.sql.Date;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -18,6 +20,16 @@ public class Employee {
    
     @Transient 
     private String tableName;
+    private Date tableDate;
+    
+
+    public Date getTableDate() {
+        return tableDate;
+    }
+
+    public void setTableDate(Date tableDate) {
+        this.tableDate = tableDate;
+    }
 
     public Employee() {
         this.columns = new HashMap<>();

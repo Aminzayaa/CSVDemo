@@ -1,5 +1,6 @@
 <%@ page language="java" contentType="text/html; charset=UTF-8" pageEncoding="UTF-8"%>
 <%@ page import="java.util.List" %>
+<%@ page import="java.util.Map" %>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -21,6 +22,9 @@
             border-color: #007bff;
             color: #007bff;
         }
+        .action-buttons button {
+            margin-right: 5px;
+        }
     </style>
 </head>
 <body>
@@ -30,7 +34,7 @@
             <!-- Left column: File Table -->
             <div class="col-md-8">
                 <div class="mb-3">
-                    <input type="text" class="form-control" placeholder="Search" />
+                    <input type="text" class="form-control" placeholder="Search by name or date" id="searchInput" />
                 </div>
                 <table class="table table-bordered upload-table">
                     <thead class="thead-light">
@@ -40,15 +44,17 @@
                             <th>アクション (Actions)</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="fileTableBody">
                         <% 
-                        List<String> tableNames = (List<String>) request.getAttribute("tableNames");
-                        if (tableNames != null) {
-                            for (String table : tableNames) {
+                        List<Map<String, Object>> tableInfo = (List<Map<String, Object>>) request.getAttribute("tableInfo");
+                        if (tableInfo != null) {
+                            for (Map<String, Object> info : tableInfo) {
+                                String tableName = (String) info.get("table_name");
+                                java.sql.Timestamp uploadDate = (java.sql.Timestamp) info.get("upload_date");
                         %>
                         <tr>
-                            <td><%= table %>.xlsx</td>
-                            <td><%= new java.text.SimpleDateFormat("MM/dd/yyyy, hh:mm:ss a").format(new java.util.Date()) %></td>
+                            <td><%= tableName %>.xlsx</td>
+                            <td><%= new java.text.SimpleDateFormat("MM/dd/yyyy, hh:mm:ss a").format(uploadDate) %></td>
                             <td>
                                 <div class="action-buttons">
                                     <button type="button" title="Download" class="btn btn-outline-primary btn-sm">
@@ -60,13 +66,14 @@
                                 </div>
                             </td>
                         </tr>
-                        <% 
+                        <%
                             }
                         } 
                         %>
                     </tbody>
                 </table>
             </div>
+            
             <!-- Right column: Drag and Drop Section -->
             <div class="col-md-4">
                 <form action="upload" method="post" enctype="multipart/form-data" id="uploadForm">
@@ -86,6 +93,7 @@
         </div>
     </div>
 
+    <!-- JavaScript for drag-drop and search functionality -->
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -117,6 +125,21 @@
                 fileInput.files = files;
                 fileNameDisplay.innerText = files[0].name;
             }
+        });
+
+        // Search functionality
+        const searchInput = document.getElementById('searchInput');
+        searchInput.addEventListener('keyup', () => {
+            const filter = searchInput.value.toLowerCase();
+            const rows = document.querySelectorAll('#fileTableBody tr');
+            rows.forEach(row => {
+                const fileName = row.cells[0].textContent.toLowerCase();
+                if (fileName.includes(filter)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
         });
     </script>
 </body>

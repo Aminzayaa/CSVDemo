@@ -6,9 +6,9 @@ package com.example.CSVDemo.controller;
     @Controller
     public class TestController {
     
-        @GetMapping("/files/test") // This mapping will trigger the controller
+        @GetMapping("/files/test") 
         public String showTestPage() {
-            return "test"; // This returns test.jsp located in /WEB-INF/views/
+            return "test";
         }
     }
     

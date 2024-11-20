@@ -1,3 +1,4 @@
+
 package com.example.CSVDemo.service;
 
 import org.apache.poi.ss.usermodel.*;
@@ -8,15 +9,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
-
-import java.io.File;
-import java.io.FileInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
 import java.io.IOException;
-import java.sql.SQLException;
-import org.apache.poi.ss.usermodel.*;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Service
 public class FileServiceImpl implements FileService {
@@ -24,66 +24,112 @@ public class FileServiceImpl implements FileService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    
+    private String lastFileChecksum = null;
 
+
+    
     @Override
-    public List<String> getTableNames() {
-        String sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'member'";
-        return jdbcTemplate.queryForList(sql, String.class);
+    public String saveFile(MultipartFile file) {
+        if (!hasXlsxFormat(file)) {
+            return "File is not in Excel format!";
+        }
+        
+        try {
+            String newFileChecksum = generateFileChecksum(file);
+            if (newFileChecksum.equals(lastFileChecksum)) {
+                return "File unchanged since last upload. No update needed.";
+            }
 
+            String tableName = processAndSaveData(file);
+            lastFileChecksum = newFileChecksum;
+
+            
+
+            return "File processed and saved to table: " + tableName;
+
+        } catch (Exception e) {
+            System.err.println("An error occurred: " + e.getMessage());
+            return "An error occurred while processing the file.";
+        }
     }
-    
-    
+
+
 
     @Override
     public boolean hasXlsxFormat(MultipartFile file) {
-        return file.getOriginalFilename().endsWith(".xlsx");
+        return file.getOriginalFilename() != null && file.getOriginalFilename().endsWith(".xlsx");
     }
 
-    @Override
-    public String processAndSaveData(MultipartFile file) throws Exception {
-    try (InputStream is = file.getInputStream();
-         Workbook workbook = new XSSFWorkbook(is)) {
+    private String generateFileChecksum(MultipartFile file) throws IOException, NoSuchAlgorithmException {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] bytes = file.getBytes();
+        byte[] digest = md.digest(bytes);
+        return bytesToHex(digest);
+    }
 
-        Sheet sheet = workbook.getSheetAt(0);
-        List<String> headers = new ArrayList<>();
-        Row headerRow = sheet.getRow(0); // Assuming the first row contains headers
-
-        // Extracting header values dynamically
-        for (Cell cell : headerRow) {
-            headers.add(cell.getStringCellValue());
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
         }
+        return hexString.toString();
+    }
 
-        String tableName = sanitizeTableName(file.getOriginalFilename().replace(".xlsx", ""));
+    public String processAndSaveData(MultipartFile file) throws Exception {
+        try (InputStream is = file.getInputStream();
+             Workbook workbook = new XSSFWorkbook(is)) {
+
+            Sheet sheet = workbook.getSheetAt(0);
+            if (sheet == null || sheet.getRow(0) == null) {
+                throw new IllegalArgumentException("Invalid or empty sheet");
+            }
+
+            List<String> headers = extractHeaders(sheet);
+            String tableName = sanitizeTableName(file.getOriginalFilename().replace(".xlsx", ""));
+            ensureTableStructure(headers, tableName);
+
+            for (int rowIndex = 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row != null) {
+                    List<String> values = convertRowToValues(row, headers.size());
+                    
+                    // Check if row is duplicate
+                    if (!isDuplicateRow(values, headers, tableName)) {
+                        insertData(values, headers, tableName);
+                    } else {
+                        System.out.println("Skipping duplicate row: " + values);
+                    }
+                }
+            }
+            return tableName;
+        } catch (IOException | IllegalArgumentException e) {
+            return "File is not in Excel format!";
+        }
+    }
+
+    private List<String> extractHeaders(Sheet sheet) {
+        List<String> headers = new ArrayList<>();
+        Row headerRow = sheet.getRow(0);
+        for (Cell cell : headerRow) {
+            headers.add(getCellValueAsString(cell));
+        }
+        return headers;
+    }
+
+    private String sanitizeTableName(String originalName) {
+        return originalName.replaceAll("[^a-zA-Z0-9_]", "_").replaceAll("_+", "_").replaceAll("^_|_$", "");
+    }
+
+    private void ensureTableStructure(List<String> headers, String tableName) {
         if (!tableExists(tableName)) {
             createTable(headers, tableName);
         } else {
             addMissingColumns(headers, tableName);
         }
-
-        // Iterate over rows, skipping the header row
-        for (int rowIndex = 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
-            Row row = sheet.getRow(rowIndex);
-            List<String> values = convertRowToValues(row);
-            String uniqueIdentifier = headers.get(0); // Assuming the first column is the unique identifier
-            String uniqueFieldValue = values.get(0);
-
-            if (isRecordExists(tableName, uniqueIdentifier, uniqueFieldValue)) {
-                if (hasDataChanged(tableName, row, uniqueIdentifier, uniqueFieldValue)) {
-                    updateData(values, headers, tableName, uniqueIdentifier, uniqueFieldValue);
-                }
-            } else {
-                insertData(values, headers, tableName);
-            }
-        }
-
-        return tableName;
-    }
-}
-
-    
-    private String sanitizeTableName(String originalName) {
-        return originalName.replaceAll("[^a-zA-Z0-9_]", "_").replaceAll("_+", "_").replaceAll("^_|_$", "");
     }
 
     private boolean tableExists(String tableName) {
@@ -92,18 +138,17 @@ public class FileServiceImpl implements FileService {
         return count != null && count > 0;
     }
 
-    private void createTable(List<String> headers, String tableName) {
-        String createTableQuery = "CREATE TABLE IF NOT EXISTS `" + tableName + "` (" +
-                headers.stream().map(header -> "`" + header + "` VARCHAR(255)").collect(Collectors.joining(", ")) + ")";
-        jdbcTemplate.execute(createTableQuery);
-    }
-
     private void addMissingColumns(List<String> headers, String tableName) {
         List<String> existingColumns = getExistingColumns(tableName);
         for (String header : headers) {
-            if (!existingColumns.contains(header)) {
-                String alterTableQuery = "ALTER TABLE `" + tableName + "` ADD COLUMN `" + header + "` VARCHAR(255)";
-                jdbcTemplate.execute(alterTableQuery);
+            String sanitizedHeader = sanitizeColumnName(header);
+            if (!existingColumns.contains(sanitizedHeader)) {
+                try {
+                    String alterTableQuery = "ALTER TABLE " + tableName + " ADD COLUMN " + sanitizedHeader + " VARCHAR(255)";
+                    jdbcTemplate.execute(alterTableQuery);
+                } catch (Exception e) {
+                    System.err.println("Error adding column " + sanitizedHeader + ": " + e.getMessage());
+                }
             }
         }
     }
@@ -113,182 +158,103 @@ public class FileServiceImpl implements FileService {
         return jdbcTemplate.queryForList(query, new Object[]{tableName.toLowerCase()}, String.class);
     }
 
-    private boolean isRecordExists(String tableName, String uniqueIdentifier, String uniqueFieldValue) {
-        String query = "SELECT COUNT(*) FROM `" + tableName + "` WHERE `" + uniqueIdentifier + "` = ?";
-        Integer count = jdbcTemplate.queryForObject(query, new Object[]{uniqueFieldValue}, Integer.class);
+    private String sanitizeColumnName(String originalName) {
+        String sanitized = originalName.replaceAll("[^a-zA-Z0-9_]", "_").toLowerCase();
+        if (Character.isDigit(sanitized.charAt(0))) {
+            sanitized = "_" + sanitized;
+        }
+        return sanitized;
+    }
+
+    private void createTable(List<String> headers, String tableName) {
+        Set<String> uniqueColumns = new HashSet<>();
+        String createTableQuery = "CREATE TABLE IF NOT EXISTS " + tableName + " (";
+        createTableQuery += IntStream.range(0, headers.size())
+                .mapToObj(i -> {
+                    String columnName = sanitizeColumnName(headers.get(i));
+                    while (!uniqueColumns.add(columnName)) {
+                        columnName += "_dup";
+                    }
+                    return columnName + " VARCHAR(255)";
+                })
+                .collect(Collectors.joining(", "));
+        createTableQuery += ")";
+        jdbcTemplate.execute(createTableQuery);
+    }
+
+    private void insertData(List<String> values, List<String> headers, String tableName) {
+        List<String> sanitizedHeaders = headers.stream()
+                                               .map(this::sanitizeColumnName)
+                                               .collect(Collectors.toList());
+
+        String columns = String.join(", ", sanitizedHeaders);
+        String placeholders = String.join(", ", Collections.nCopies(sanitizedHeaders.size(), "?"));
+
+        while (values.size() < sanitizedHeaders.size()) {
+            values.add("");
+        }
+
+        String insertQuery = "INSERT INTO " + tableName + " (" + columns + ") VALUES (" + placeholders + ")";
+        jdbcTemplate.update(insertQuery, values.toArray());
+    }
+
+    private boolean isDuplicateRow(List<String> values, List<String> headers, String tableName) {
+        String condition = IntStream.range(0, headers.size())
+                .mapToObj(i -> sanitizeColumnName(headers.get(i)) + " = ?")
+                .collect(Collectors.joining(" AND "));
+        String query = "SELECT COUNT(*) FROM " + tableName + " WHERE " + condition;
+
+        Integer count = jdbcTemplate.queryForObject(query, values.toArray(), Integer.class);
         return count != null && count > 0;
     }
-    
-    private boolean hasDataChanged(String tableName, Row row, String uniqueIdentifier, String uniqueFieldValue) {
-        String query = "SELECT * FROM `" + tableName + "` WHERE `" + uniqueIdentifier + "` = ?";
-        List<String> existingData = jdbcTemplate.queryForList(query, String.class, uniqueFieldValue);
-
-        if (existingData.isEmpty()) {
-            return true;
-        }
-
-        for (int i = 0; i < row.getLastCellNum(); i++) {
-            Cell cell = row.getCell(i);
-            if (cell != null && !cell.toString().equals(existingData.get(i))) {
-                return true; // Data has changed
-            }
-        }
-        return false;
-    }
-
-    private void updateData(List<String> values, List<String> headers, String tableName, String uniqueIdentifier, String uniqueFieldValue) {
-        String setClause = headers.stream().map(header -> "`" + header + "` = ?").collect(Collectors.joining(", "));
-        String updateQuery = "UPDATE `" + tableName + "` SET " + setClause + " WHERE `" + uniqueIdentifier + "` = ?";
-        List<String> parameters = new ArrayList<>(values);
-        parameters.add(uniqueFieldValue);
-        jdbcTemplate.update(updateQuery, parameters.toArray(new String[0]));
-    }
-    public void uploadExcelFile(String filePath) throws IOException, SQLException {
-        FileInputStream fis = new FileInputStream(filePath);
-        Workbook workbook = WorkbookFactory.create(fis);
-        Sheet sheet = workbook.getSheetAt(0);
-    
-        // Create table dynamically based on the Excel header
-        StringBuilder createTableSql = new StringBuilder("CREATE TABLE IF NOT EXISTS test1 (id INT PRIMARY KEY AUTO_INCREMENT, ");
-        Row headerRow = sheet.getRow(0);
-    
-        for (Cell cell : headerRow) {
-            String columnName = cell.getStringCellValue();
-            createTableSql.append("`").append(columnName).append("` VARCHAR(255), "); // Using VARCHAR for simplicity
-        }
-    
-        // Remove last comma and space, and add closing parenthesis
-        createTableSql.setLength(createTableSql.length() - 2);
-        createTableSql.append(");");
-    
-        // Execute create table SQL
-        jdbcTemplate.execute(createTableSql.toString());
-    
-        // Insert data from the Excel file
-        for (int i = 1; i <= sheet.getLastRowNum(); i++) { // Start from the second row
-            Row row = sheet.getRow(i);
-    
-            // Prepare insert SQL with backticks
-            StringBuilder insertSql = new StringBuilder("INSERT INTO test1 (");
-            StringBuilder valuesPlaceholder = new StringBuilder();
-    
-            for (Cell cell : headerRow) {
-                String columnName = cell.getStringCellValue();
-                insertSql.append("`").append(columnName).append("`, ");
-                valuesPlaceholder.append("?, ");
-            }
-    
-            // Remove last comma and space
-            insertSql.setLength(insertSql.length() - 2);
-            valuesPlaceholder.setLength(valuesPlaceholder.length() - 2);
-    
-            // Finalize insert SQL
-            insertSql.append(") VALUES (").append(valuesPlaceholder).append(");");
-    
-            // Prepare values for insertion
-            Object[] values = new Object[headerRow.getLastCellNum()];
-            for (int j = 0; j < headerRow.getLastCellNum(); j++) {
-                Cell cell = row.getCell(j);
-                values[j] = cell != null ? cell.toString() : null; // Handle null values
-            }
-    
-            // Execute insert SQL
-            jdbcTemplate.update(insertSql.toString(), values);
-        }
-    
-        workbook.close();
-        fis.close();
-    }
-    private void insertData(List<String> values, List<String> headers, String tableName) {
-        String columnNames = String.join(", ", headers.stream().map(header -> "`" + header + "`").collect(Collectors.toList()));
-        String placeholders = values.stream().map(value -> "?").collect(Collectors.joining(", "));
-        String insertQuery = "INSERT INTO `" + tableName + "` (" + columnNames + ") VALUES (" + placeholders + ")";
-        jdbcTemplate.update(insertQuery, values.toArray(new String[0]));
-    }
-
-    private List<String> convertRowToValues(Row row) {
-        List<String> values = new ArrayList<>();
-        for (int i = 0; i < row.getLastCellNum(); i++) {
-            Cell cell = row.getCell(i);
-            String cleanedValue = (cell != null) ? cell.toString().trim() : "";
-            values.add(cleanedValue.isEmpty() ? "NULL" : cleanedValue);
-        }
-        return values;
-    }
-
     @Override
-    public void saveFile(MultipartFile file) throws Exception {
-        if (!hasXlsxFormat(file)) {
-            throw new IllegalArgumentException("File is not in Excel format!");
-        }
-
-        try (InputStream inputStream = file.getInputStream();
-             Workbook workbook = new XSSFWorkbook(inputStream)) {
-
-            // Get the first sheet from the Excel file
-            Sheet sheet = workbook.getSheetAt(0);
-            if (sheet == null) {
-                throw new IllegalArgumentException("Sheet is empty!");
-            }
-
-            // Get the headers (assuming first row contains column names)
-            Row headerRow = sheet.getRow(0);
-            if (headerRow == null) {
-                throw new IllegalArgumentException("Header row is missing!");
-            }
-
-            List<String> headers = new ArrayList<>();
-            for (Cell cell : headerRow) {
-                headers.add(cell.getStringCellValue());
-            }
-
-            // Create or modify the table based on headers
-            String tableName = sanitizeTableName(file.getOriginalFilename().replace(".xlsx", ""));
-            if (!tableExists(tableName)) {
-                createTable(headers, tableName);
-            }
-
-            // Iterate through each row (skipping header row) and insert into the database
-            for (int i = 1; i <= sheet.getLastRowNum(); i++) {
-                Row row = sheet.getRow(i);
-                if (row == null) continue;
-
-                List<String> values = new ArrayList<>();
-                for (int j = 0; j < headers.size(); j++) {
-                    Cell cell = row.getCell(j);
-                    values.add(getCellValueAsString(cell));
-                }
-
-                // Insert the row into the database
-                insertData(values, headers, tableName);
-            }
-        }
+    public List<Map<String, Object>> getTableInfo() {
+        String sql = "SELECT table_name, create_time AS upload_date FROM information_schema.tables WHERE table_schema = 'member' ORDER BY upload_date DESC";
+        return jdbcTemplate.queryForList(sql);
     }
+
+   
 
     private String getCellValueAsString(Cell cell) {
-        if (cell == null) {
-            return "";
-        }
+        if (cell == null) return "";
         switch (cell.getCellType()) {
             case STRING:
                 return cell.getStringCellValue();
             case NUMERIC:
-                return String.valueOf(cell.getNumericCellValue());
+                if (DateUtil.isCellDateFormatted(cell)) {
+                    return new SimpleDateFormat("yyyy-MM-dd").format(cell.getDateCellValue());
+                } else {
+                    return String.valueOf(cell.getNumericCellValue());
+                }
             case BOOLEAN:
-                return String.valueOf(cell.getBooleanCellValue());
+                return Boolean.toString(cell.getBooleanCellValue());
+            case FORMULA:
+                return cell.getCellFormula();
             default:
                 return "";
         }
     }
 
-    // @Override
-    // public List<String> getTableNames() {
-    //     // TODO Auto-generated method stub
-    //     throw new UnsupportedOperationException("Unimplemented method 'getTableNames'");
-    
-        // @Override
-        // public List<String> getTableNames() {
-        //     String query = "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()";
-        //     return jdbcTemplate.queryForList(query, String.class);
+    private List<String> convertRowToValues(Row row, int expectedSize) {
+        List<String> values = new ArrayList<>();
+        for (int i = 0; i < expectedSize; i++) {
+            Cell cell = row.getCell(i);
+            values.add(getCellValueAsString(cell));
+        }
+        return values;
     }
+
+
+
+  
+
+
+
+    
+    }
+
+
+
+
+
 
